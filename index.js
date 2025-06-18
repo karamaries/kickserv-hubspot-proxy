@@ -11,7 +11,7 @@ require('dotenv').config();
 app.use(cors());
 app.use(bodyParser.json());
 
-const HUBSPOT_API_KEY = process.env.HUBSPOT_API_KEY;
+const HUBSPOT_API_KEY = process.env.HUBSPOT_TOKEN;
 
 app.post('/send-to-hubspot', async (req, res) => {
   const {
@@ -131,7 +131,7 @@ app.post('/send-to-hubspot', async (req, res) => {
     } catch (err) {
       const msg = err.response?.data?.message;
       if (msg?.includes('Contact already exists') && msg?.includes('Existing ID:')) {
-        const match = msg.match(/Existing ID: (\d+)/);
+        const match = msg.match(/Existing ID: (\\d+)/);
         if (match && match[1]) {
           contactId = match[1];
           console.log(`👤 Reusing existing contact ID: ${contactId}`);
