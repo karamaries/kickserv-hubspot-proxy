@@ -1,157 +1,174 @@
-const express = require('express');
-const axios = require('axios');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-
+const express = require("express");
+const bodyParser = require("body-parser");
+const axios = require("axios");
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-require('dotenv').config();
-
-app.use(cors());
 app.use(bodyParser.json());
 
-const HUBSPOT_API_KEY = process.env.HUBSPOT_TOKEN;
-
-app.post('/send-to-hubspot', async (req, res) => {
+app.post("/send", async (req, res) => {
   const {
     dealName,
     companyName,
+    companyDomain,
     companyAddress,
     contactName,
-    email,
-    phone,
+    contactEmail,
+    contactPhone,
+    jobNumber,
     jobTotal,
-    kickservJobNumber,
-    dealStage
+    description,
+    stageId // this is the internal ID like "1005328899"
   } = req.body;
 
-  if (!dealName || !kickservJobNumber) {
-    return res.status(400).json({ error: 'Missing job number or deal name' });
+  if (!jobNumber || !dealName) {
+    return res.status(400).json({ error: "Missing job number or deal name." });
   }
 
-  const headers = {
-    Authorization: `Bearer ${HUBSPOT_API_KEY}`,
-    'Content-Type': 'application/json'
-  };
+  const HUBSPOT_API = "https://api.hubapi.com";
+  const HUBSPOT_TOKEN = process.env.HUBSPOT_TOKEN;
+  const JOB_NUMBER_FIELD = "kickserv_job_";
 
   try {
-    // Check for existing deal by Kickserv job number
-    const dealSearch = await axios.post('https://api.hubapi.com/crm/v3/objects/deals/search', {
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: 'kickserv_job_',
-              operator: 'EQ',
-              value: kickservJobNumber
-            }
-          ]
-        }
-      ]
-    }, { headers });
+    // 1. Check for contact
+    let contactId;
+    const contactSearch = await axios.post(
+      `${HUBSPOT_API}/crm/v3/objects/contacts/search`,
+      {
+        filterGroups: [{
+          filters: [{
+            propertyName: "email",
+            operator: "EQ",
+            value: contactEmail
+          }]
+        }]
+      },
+      { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+    );
 
-    let dealId = null;
-    if (dealSearch.data.total > 0) {
-      // Deal exists, update it
-      dealId = dealSearch.data.results[0].id;
-      await axios.patch(`https://api.hubapi.com/crm/v3/objects/deals/${dealId}`, {
-        properties: {
-          amount: jobTotal || null,
-          dealstage: dealStage || null
-        }
-      }, { headers });
-      console.log(`🔄 Updated existing deal ID: ${dealId}`);
+    if (contactSearch.data.results.length > 0) {
+      contactId = contactSearch.data.results[0].id;
     } else {
-      // Create deal
-      const newDeal = await axios.post('https://api.hubapi.com/crm/v3/objects/deals', {
-        properties: {
-          dealname: dealName,
-          amount: jobTotal || null,
-          dealstage: dealStage || null,
-          pipeline: 'jobs',
-          kickserv_job_: kickservJobNumber
-        }
-      }, { headers });
-
-      dealId = newDeal.data.id;
-      console.log(`✅ Created new deal ID: ${dealId}`);
+      const newContact = await axios.post(
+        `${HUBSPOT_API}/crm/v3/objects/contacts`,
+        {
+          properties: {
+            email: contactEmail,
+            firstname: contactName,
+            phone: contactPhone
+          }
+        },
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+      contactId = newContact.data.id;
     }
 
-    // Create or reuse company
+    // 2. Check for company
     let companyId;
-    if (companyName) {
-      const companySearch = await axios.post('https://api.hubapi.com/crm/v3/objects/companies/search', {
-        filterGroups: [
-          {
-            filters: [
-              {
-                propertyName: 'name',
-                operator: 'EQ',
-                value: companyName
-              }
-            ]
-          }
-        ]
-      }, { headers });
+    const companySearch = await axios.post(
+      `${HUBSPOT_API}/crm/v3/objects/companies/search`,
+      {
+        filterGroups: [{
+          filters: [{
+            propertyName: "name",
+            operator: "EQ",
+            value: companyName
+          }]
+        }]
+      },
+      { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+    );
 
-      if (companySearch.data.total > 0) {
-        companyId = companySearch.data.results[0].id;
-        console.log(`🔎 Found existing company ID: ${companyId}`);
-      } else {
-        const companyRes = await axios.post('https://api.hubapi.com/crm/v3/objects/companies', {
+    if (companySearch.data.results.length > 0) {
+      companyId = companySearch.data.results[0].id;
+    } else {
+      const newCompany = await axios.post(
+        `${HUBSPOT_API}/crm/v3/objects/companies`,
+        {
           properties: {
             name: companyName,
-            address: companyAddress || ''
+            domain: companyDomain,
+            address: companyAddress
           }
-        }, { headers });
-
-        companyId = companyRes.data.id;
-        console.log(`🏢 Created new company ID: ${companyId}`);
-      }
-
-      // Associate company to deal
-      await axios.put(`https://api.hubapi.com/crm/v3/objects/deals/${dealId}/associations/companies/${companyId}/deal_to_company`, {}, { headers });
-      console.log(`🔗 Associated company ${companyId} to deal ${dealId}`);
+        },
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+      companyId = newCompany.data.id;
     }
 
-    // Create or reuse contact
-    let contactId;
-    try {
-      const contactRes = await axios.post('https://api.hubapi.com/crm/v3/objects/contacts', {
-        properties: {
-          firstname: contactName || 'Unknown',
-          email: email || undefined,
-          phone: phone || undefined
-        }
-      }, { headers });
+    // 3. Check for existing deal by job number
+    let dealId;
+    const dealSearch = await axios.post(
+      `${HUBSPOT_API}/crm/v3/objects/deals/search`,
+      {
+        filterGroups: [{
+          filters: [{
+            propertyName: JOB_NUMBER_FIELD,
+            operator: "EQ",
+            value: jobNumber
+          }]
+        }]
+      },
+      { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+    );
 
-      contactId = contactRes.data.id;
-      console.log(`👤 Created new contact ID: ${contactId}`);
-    } catch (err) {
-      const msg = err.response?.data?.message;
-      if (msg?.includes('Contact already exists') && msg?.includes('Existing ID:')) {
-        const match = msg.match(/Existing ID: (\\d+)/);
-        if (match && match[1]) {
-          contactId = match[1];
-          console.log(`👤 Reusing existing contact ID: ${contactId}`);
-        }
-      } else {
-        console.error('❌ Contact creation error:', err.response?.data || err.message);
+    const dealPayload = {
+      properties: {
+        dealname: dealName,
+        amount: jobTotal,
+        description: description,
+        dealstage: stageId,
+        pipeline: "default",
+        [JOB_NUMBER_FIELD]: jobNumber
       }
+    };
+
+    if (dealSearch.data.results.length > 0) {
+      dealId = dealSearch.data.results[0].id;
+      await axios.patch(
+        `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}`,
+        dealPayload,
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+    } else {
+      const newDeal = await axios.post(
+        `${HUBSPOT_API}/crm/v3/objects/deals`,
+        dealPayload,
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+      dealId = newDeal.data.id;
     }
 
-    // Associate contact to deal
+    // 4. Associate contact and company
     if (contactId) {
-      await axios.put(`https://api.hubapi.com/crm/v3/objects/deals/${dealId}/associations/contacts/${contactId}/deal_to_contact`, {}, { headers });
-      console.log(`🔗 Associated contact ${contactId} to deal ${dealId}`);
+      await axios.put(
+        `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}/associations/contact/${contactId}/deal_to_contact`,
+        {},
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
     }
 
-    res.json({ success: true, dealId });
-  } catch (err) {
-    console.error('❌ HubSpot Error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'HubSpot Error', detail: err.response?.data || err.message });
+    if (companyId) {
+      await axios.put(
+        `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}/associations/company/${companyId}/deal_to_company`,
+        {},
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+    }
+
+    res.json({ success: true, message: "✅ Deal sent to HubSpot!" });
+
+  } catch (error) {
+    console.error("❌ HubSpot Error:", error.response?.data || error.message);
+    res.status(500).json({
+      error: "HubSpot Error",
+      details: error.response?.data || error.message
+    });
   }
+});
+
+app.get("/", (req, res) => {
+  res.send("✅ Kickserv → HubSpot Proxy is running");
 });
 
 app.listen(PORT, () => {
