@@ -11,6 +11,7 @@ app.post("/send", async (req, res) => {
     dealName,
     companyName,
     parentCompany,
+    companyDomain,
     companyAddress,
     contactName,
     contactEmail,
@@ -18,8 +19,7 @@ app.post("/send", async (req, res) => {
     jobNumber,
     jobTotal,
     description,
-    stageId,
-    locationName
+    stageId
   } = req.body;
 
   if (!jobNumber || !dealName) {
@@ -28,93 +28,89 @@ app.post("/send", async (req, res) => {
 
   const HUBSPOT_API = "https://api.hubapi.com";
   const HUBSPOT_TOKEN = process.env.HUBSPOT_TOKEN;
-  const JOB_NUMBER_FIELD = "kickserv_job_";
+  const JOB_NUMBER_FIELD = "kickserv_job_number"; // <--- replace with your actual HubSpot property internal name
+
+  const clean = (str) => (str?.toString().trim() || null);
 
   try {
-    console.log("📥 Received payload:", req.body);
+    console.log("📥 Payload received:", req.body);
 
-    const clean = (str) => (str?.toString().trim() || null);
-
-    const payloadForHubSpot = {
-      properties: {
-        dealname: clean(dealName),
-        amount: jobTotal || 0,
-        description: clean(description),
-        dealstage: clean(stageId),
-        pipeline: "default",
-        [JOB_NUMBER_FIELD]: clean(jobNumber)
-      }
-    };
-
-    // Remove nulls to avoid invalid JSON
-    Object.keys(payloadForHubSpot.properties).forEach(key => {
-      if (!payloadForHubSpot.properties[key]) delete payloadForHubSpot.properties[key];
-    });
-
-    const headers = { Authorization: `Bearer ${HUBSPOT_TOKEN}` };
-
-    // 🌟 Check/create company
-    let companyId = null;
-    if (companyName) {
-      const companySearch = await axios.post(
-        `${HUBSPOT_API}/crm/v3/objects/companies/search`,
-        {
-          filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: clean(companyName) }] }]
-        },
-        { headers }
-      );
-      if (companySearch.data.results.length > 0) {
-        companyId = companySearch.data.results[0].id;
-      } else {
-        const newCompany = await axios.post(
-          `${HUBSPOT_API}/crm/v3/objects/companies`,
-          { properties: { name: clean(companyName), address: clean(companyAddress) } },
-          { headers }
-        );
-        companyId = newCompany.data.id;
-      }
-    }
-
-    // 🌟 Check/create parent company
+    // 1️⃣ Parent company
     let parentCompanyId = null;
     if (parentCompany) {
       const parentSearch = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/companies/search`,
         {
-          filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: clean(parentCompany) }] }]
+          filterGroups: [{
+            filters: [{ propertyName: "name", operator: "EQ", value: clean(parentCompany) }]
+          }]
         },
-        { headers }
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
+
       if (parentSearch.data.results.length > 0) {
         parentCompanyId = parentSearch.data.results[0].id;
       } else {
         const newParent = await axios.post(
           `${HUBSPOT_API}/crm/v3/objects/companies`,
           { properties: { name: clean(parentCompany) } },
-          { headers }
+          { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
         );
         parentCompanyId = newParent.data.id;
       }
     }
 
-    if (companyId && parentCompanyId && companyId !== parentCompanyId) {
+    // 2️⃣ Child company
+    let companyId = null;
+    const companySearch = await axios.post(
+      `${HUBSPOT_API}/crm/v3/objects/companies/search`,
+      {
+        filterGroups: [{
+          filters: [{ propertyName: "name", operator: "EQ", value: clean(companyName) }]
+        }]
+      },
+      { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+    );
+
+    if (companySearch.data.results.length > 0) {
+      companyId = companySearch.data.results[0].id;
+    } else {
+      const newCompany = await axios.post(
+        `${HUBSPOT_API}/crm/v3/objects/companies`,
+        {
+          properties: {
+            name: clean(companyName),
+            domain: clean(companyDomain),
+            address: clean(companyAddress)
+          }
+        },
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+      companyId = newCompany.data.id;
+    }
+
+    // 3️⃣ Associate child → parent
+    if (parentCompanyId && companyId && parentCompanyId !== companyId) {
       await axios.put(
         `${HUBSPOT_API}/crm/v3/objects/companies/${companyId}/associations/parent_company/${parentCompanyId}/company_to_company`,
         {},
-        { headers }
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
     }
 
-    // 🌟 Check/create contact
+    // 4️⃣ Contact
     let contactId = null;
     if (contactEmail) {
       const contactSearch = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/contacts/search`,
         {
-          filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: clean(contactEmail) }] }]
+          filterGroups: [{
+            filters: [{ propertyName: "email", operator: "EQ", value: clean(contactEmail) }]
+          }]
         },
-        { headers }
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
+
       if (contactSearch.data.results.length > 0) {
         contactId = contactSearch.data.results[0].id;
       } else {
@@ -127,13 +123,13 @@ app.post("/send", async (req, res) => {
               phone: clean(contactPhone)
             }
           },
-          { headers }
+          { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
         );
         contactId = newContact.data.id;
       }
     }
 
-    // 🌟 Check/create deal
+    // 5️⃣ Deal
     let dealId = null;
     const dealSearch = await axios.post(
       `${HUBSPOT_API}/crm/v3/objects/deals/search`,
@@ -142,49 +138,66 @@ app.post("/send", async (req, res) => {
           filters: [{ propertyName: JOB_NUMBER_FIELD, operator: "EQ", value: clean(jobNumber) }]
         }]
       },
-      { headers }
+      { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
     );
+
+    const dealPayload = {
+      properties: {
+        dealname: clean(dealName),
+        amount: jobTotal || 0,
+        description: clean(description),
+        dealstage: clean(stageId),
+        pipeline: "default",
+        [JOB_NUMBER_FIELD]: clean(jobNumber)
+      }
+    };
+
+    // remove empty/null properties
+    Object.keys(dealPayload.properties).forEach(k => {
+      if (!dealPayload.properties[k]) delete dealPayload.properties[k];
+    });
 
     if (dealSearch.data.results.length > 0) {
       dealId = dealSearch.data.results[0].id;
       await axios.patch(
         `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}`,
-        payloadForHubSpot,
-        { headers }
+        dealPayload,
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
-      console.log(`🔄 Updated deal: ${dealId}`);
     } else {
       const newDeal = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/deals`,
-        payloadForHubSpot,
-        { headers }
+        dealPayload,
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
       dealId = newDeal.data.id;
-      console.log(`✨ Created deal: ${dealId}`);
     }
 
-    // 🌟 Associate deal with company & contact
-    if (companyId) {
-      await axios.put(
-        `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}/associations/company/${companyId}/deal_to_company`,
-        {},
-        { headers }
-      );
-    }
-
+    // 6️⃣ Associate deal → contact & company
     if (contactId) {
       await axios.put(
         `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}/associations/contact/${contactId}/deal_to_contact`,
         {},
-        { headers }
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
     }
 
-    res.json({ success: true, message: "✅ Deal processed successfully" });
+    if (companyId) {
+      await axios.put(
+        `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}/associations/company/${companyId}/deal_to_company`,
+        {},
+        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+      );
+    }
+
+    res.json({ success: true, message: "✅ Deal sent to HubSpot!" });
 
   } catch (err) {
     console.error("❌ HubSpot Error:", err.response?.data || err.message);
-    res.status(500).json({ error: "HubSpot Error", details: err.response?.data || err.message });
+    res.status(500).json({
+      error: "HubSpot Error",
+      details: err.response?.data || err.message
+    });
   }
 });
 
