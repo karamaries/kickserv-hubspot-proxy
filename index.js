@@ -122,47 +122,56 @@ app.post("/send", async (req, res) => {
     }
 
     // ---------- Deal ----------
-    let dealId = null;
-    const dealSearch = await axios.post(
-      `${HUBSPOT_API}/crm/v3/objects/deals/search`,
-      {
-        filterGroups: [{
-          filters: [{ propertyName: JOB_NUMBER_FIELD, operator: "EQ", value: clean(jobNumber) }]
-        }]
-      },
-      { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
-    );
+   let dealId = null;
+console.log(`🔎 Searching deals where ${JOB_NUMBER_FIELD} = ${clean(jobNumber)}`);
 
-    const dealPayload = {
-      properties: {
-        dealname: clean(dealName),
-        amount: jobTotal || 0,
-        description: clean(description),
-        dealstage: clean(stageId),
-        pipeline: "default",
-        [JOB_NUMBER_FIELD]: clean(jobNumber)
-      }
-    };
+const dealSearch = await axios.post(
+  `${HUBSPOT_API}/crm/v3/objects/deals/search`,
+  {
+    filterGroups: [{
+      filters: [{
+        propertyName: JOB_NUMBER_FIELD,
+        operator: "EQ",
+        value: clean(jobNumber)
+      }]
+    }],
+    limit: 1
+  },
+  { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+);
 
-    if (dealSearch.data.results.length > 0) {
-      // 🔄 Update existing deal with ALL fields
-      dealId = dealSearch.data.results[0].id;
-      await axios.patch(
-        `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}`,
-        dealPayload,
-        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
-      );
-      console.log(`🔄 Updated deal: ${dealId}`);
-    } else {
-      // ✨ Create new deal
-      const newDeal = await axios.post(
-        `${HUBSPOT_API}/crm/v3/objects/deals`,
-        dealPayload,
-        { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
-      );
-      dealId = newDeal.data.id;
-      console.log(`✨ Created deal: ${dealId}`);
-    }
+console.log("🔍 HubSpot search response:", dealSearch.data);
+
+const dealPayload = {
+  properties: {
+    dealname: clean(dealName),
+    amount: jobTotal || 0,
+    description: clean(description),
+    dealstage: clean(stageId),
+    pipeline: "default",
+    [JOB_NUMBER_FIELD]: clean(jobNumber)
+  }
+};
+
+if (dealSearch.data.results.length > 0) {
+  dealId = dealSearch.data.results[0].id;
+  console.log(`🔄 Updating existing deal ID ${dealId}`);
+  await axios.patch(
+    `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}`,
+    dealPayload,
+    { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+  );
+  console.log(`✅ Deal updated: ${dealId}`);
+} else {
+  console.log("✨ Creating new deal");
+  const newDeal = await axios.post(
+    `${HUBSPOT_API}/crm/v3/objects/deals`,
+    dealPayload,
+    { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
+  );
+  dealId = newDeal.data.id;
+  console.log(`✅ Deal created: ${dealId}`);
+}
 
     // ---------- Associations ----------
     if (contactId) {
