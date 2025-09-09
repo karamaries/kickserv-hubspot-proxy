@@ -1,8 +1,17 @@
 const express = require("express");
 const bodyParser = require("body-parser");
+const cors = require("cors");
 const axios = require("axios");
+
 const app = express();
 const PORT = process.env.PORT || 10000;
+
+// ✅ Enable CORS for all origins (Tampermonkey needs this)
+app.use(cors({
+  origin: '*',
+  methods: ['POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
 
 app.use(bodyParser.json());
 
