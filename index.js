@@ -6,7 +6,7 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ Enable CORS for all origins (Tampermonkey needs this)
+// Enable CORS
 app.use(cors({
   origin: '*',
   methods: ['POST', 'OPTIONS'],
@@ -37,27 +37,18 @@ app.post("/send", async (req, res) => {
 
   const HUBSPOT_API = "https://api.hubapi.com";
   const HUBSPOT_TOKEN = process.env.HUBSPOT_TOKEN;
-  const JOB_NUMBER_FIELD = "kickserv_job_";
+  const JOB_NUMBER_FIELD = "kickserv_job_"; // your custom property name
 
   try {
     console.log("📥 Payload received:", req.body);
-
     const clean = (str) => str?.toString().trim() || null;
 
-    // 🔷 Find or create parent company
+    // ---------- Parent Company ----------
     let parentCompanyId = null;
     if (clean(parentCompany)) {
       const parentSearch = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/companies/search`,
-        {
-          filterGroups: [{
-            filters: [{
-              propertyName: "name",
-              operator: "EQ",
-              value: clean(parentCompany)
-            }]
-          }]
-        },
+        { filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: clean(parentCompany) }] }] },
         { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
 
@@ -73,24 +64,14 @@ app.post("/send", async (req, res) => {
         parentCompanyId = newParent.data.id;
         console.log(`✨ Created parent company: ${parentCompanyId}`);
       }
-    } else {
-      console.log("ℹ️ No parent company provided — skipping");
     }
 
-    // 🔷 Find or create child company
+    // ---------- Child Company ----------
     let companyId = null;
     if (clean(companyName)) {
       const companySearch = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/companies/search`,
-        {
-          filterGroups: [{
-            filters: [{
-              propertyName: "name",
-              operator: "EQ",
-              value: clean(companyName)
-            }]
-          }]
-        },
+        { filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: clean(companyName) }] }] },
         { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
 
@@ -100,23 +81,14 @@ app.post("/send", async (req, res) => {
       } else {
         const newCompany = await axios.post(
           `${HUBSPOT_API}/crm/v3/objects/companies`,
-          {
-            properties: {
-              name: clean(companyName),
-              domain: clean(companyDomain),
-              address: clean(companyAddress)
-            }
-          },
+          { properties: { name: clean(companyName), domain: clean(companyDomain), address: clean(companyAddress) } },
           { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
         );
         companyId = newCompany.data.id;
         console.log(`✨ Created company: ${companyId}`);
       }
-    } else {
-      console.log("❌ No companyName provided — cannot create or find company");
     }
 
-    // 🔷 Link child to parent if both exist
     if (parentCompanyId && companyId && parentCompanyId !== companyId) {
       await axios.put(
         `${HUBSPOT_API}/crm/v3/objects/companies/${companyId}/associations/parent_company/${parentCompanyId}/company_to_company`,
@@ -126,20 +98,12 @@ app.post("/send", async (req, res) => {
       console.log(`🔗 Linked child ${companyId} → parent ${parentCompanyId}`);
     }
 
-    // 🔷 Find or create contact
+    // ---------- Contact ----------
     let contactId = null;
     if (clean(contactEmail)) {
       const contactSearch = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/contacts/search`,
-        {
-          filterGroups: [{
-            filters: [{
-              propertyName: "email",
-              operator: "EQ",
-              value: clean(contactEmail)
-            }]
-          }]
-        },
+        { filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: clean(contactEmail) }] }] },
         { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
       );
 
@@ -149,33 +113,21 @@ app.post("/send", async (req, res) => {
       } else {
         const newContact = await axios.post(
           `${HUBSPOT_API}/crm/v3/objects/contacts`,
-          {
-            properties: {
-              email: clean(contactEmail),
-              firstname: clean(contactName),
-              phone: clean(contactPhone)
-            }
-          },
+          { properties: { email: clean(contactEmail), firstname: clean(contactName), phone: clean(contactPhone) } },
           { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
         );
         contactId = newContact.data.id;
         console.log(`✨ Created contact: ${contactId}`);
       }
-    } else {
-      console.log("ℹ️ No contact email provided — skipping contact");
     }
 
-    // 🔷 Find or create deal
+    // ---------- Deal ----------
     let dealId = null;
     const dealSearch = await axios.post(
       `${HUBSPOT_API}/crm/v3/objects/deals/search`,
       {
         filterGroups: [{
-          filters: [{
-            propertyName: JOB_NUMBER_FIELD,
-            operator: "EQ",
-            value: clean(jobNumber)
-          }]
+          filters: [{ propertyName: JOB_NUMBER_FIELD, operator: "EQ", value: clean(jobNumber) }]
         }]
       },
       { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
@@ -193,6 +145,7 @@ app.post("/send", async (req, res) => {
     };
 
     if (dealSearch.data.results.length > 0) {
+      // 🔄 Update existing deal with ALL fields
       dealId = dealSearch.data.results[0].id;
       await axios.patch(
         `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}`,
@@ -201,6 +154,7 @@ app.post("/send", async (req, res) => {
       );
       console.log(`🔄 Updated deal: ${dealId}`);
     } else {
+      // ✨ Create new deal
       const newDeal = await axios.post(
         `${HUBSPOT_API}/crm/v3/objects/deals`,
         dealPayload,
@@ -210,7 +164,7 @@ app.post("/send", async (req, res) => {
       console.log(`✨ Created deal: ${dealId}`);
     }
 
-    // 🔷 Associate deal with contact & company
+    // ---------- Associations ----------
     if (contactId) {
       await axios.put(
         `${HUBSPOT_API}/crm/v3/objects/deals/${dealId}/associations/contact/${contactId}/deal_to_contact`,
@@ -229,7 +183,7 @@ app.post("/send", async (req, res) => {
       console.log(`🔗 Linked deal → company: ${companyId}`);
     }
 
-    res.json({ success: true, message: "✅ Deal sent to HubSpot!" });
+    res.json({ success: true, message: "✅ Deal synced to HubSpot!" });
 
   } catch (error) {
     console.error("❌ HubSpot Error:", error.response?.data || error.message);
